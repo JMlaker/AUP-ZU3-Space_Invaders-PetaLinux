@@ -1,0 +1,73 @@
+/include/ "system-conf.dtsi"
+#include <dt-bindings/phy/phy.h>
+/ {
+	chosen {
+		bootargs = "earlycon console=ttyPS0,115200 console=tty0 uio_pdrv_genirq.of_id=generic-uio clk_ignore_unused video=DP-1:640x480@60";
+		stdout-path = "serial0:115200n8";
+	};
+
+	dp_clk:psgtr_dp_clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <27000000>;
+	};
+
+ 	reserved-memory {
+ 		#address-cells = <2>;
+ 		#size-cells = <2>;
+ 		ranges;
+ 
+ 		udmabuf_reserved: udmabuf_reserved@70000000 {
+ 			compatible = "shared-dma-pool";
+ 			reusable;
+ 			no-map;
+ 			reg = <0x0 0x70000000 0x0 0x10000000>;
+ 			label = "udmabuf_reserved";
+ 		};
+ 	};
+ 
+ 	udmabuf0: udmabuf@0x70000000 {
+ 		compatible = "ikwzm,u-dma-buf";
+ 		device-name = "udmabuf0";
+ 		minor-number = <0>;
+ 		size = <0x4000000>;
+		dma-coherent;
+ 	};
+};
+
+&amba {
+	mmio_dma_0: mmio_dma@A0000000 {
+		compatible = "generic-uio";
+		/* Base Address: 0xA0000000 (from Vivado)
+		* Size: 0x10000 (64KB)
+		*/
+		reg = <0x0 0xA0000000 0x0 0x10000>;
+		dma-coherent;
+	};
+
+	axi4_dma_0: dma@B0000000 {
+		compatible = "generic-uio";
+		/* Base Address: 0xB0000000 (from Vivado)
+		* Size: 0x10000 (64KB)
+		*/
+		reg = <0x0 0xB0000000 0x0 0x10000>;
+		dma-coherent;
+	};
+
+};
+
+&zynqmp_dpdma {
+	status = "okay";
+};
+
+&psgtr {
+	clocks = <&dp_clk>;
+	clock-names = "ref0", "ref1";
+};
+
+&zynqmp_dpsub {
+	status = "okay";
+	phys = <&psgtr 1 PHY_TYPE_DP 0 0>, <&psgtr 0 PHY_TYPE_DP 1 0>;
+	phy-names = "dp-phy0", "dp-phy1";
+};
+
