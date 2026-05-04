@@ -13,7 +13,6 @@ all:
 else
 
 all:
-	cd Conrainer
 	echo "Running petalinux... this takes around 25 minutes to complete the first time."
 	echo "Container runs in daemon mode by default. Look at ./projects/petalinux.log for log updates"
 	echo "Run with 'env DEBUG=1' to see output in real time."
@@ -28,13 +27,14 @@ ifeq ($(DEBUG),0)
 
 run:
 	cd Container
-	$(CONTAINER) compose up -d
+	$(CONTAINER) compose up -d --build
 
 else
 
 run:
 	cd Container
-	$(CONTAINER) compose up
+	$(CONTAINER) compose up --build
+	cd ..
 	$(MAKE) unshare
 
 endif
