@@ -1,0 +1,89 @@
+services:
+  init:
+    # Build the image if necessary
+    build:
+      context: ./container
+      dockerfile: Containerfile
+    
+    image: docker.io/library/petalinux:latest
+
+    platform: linux/amd64
+
+    network_mode: host
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
+    volumes:
+      - ../projects:/projects:Z,U
+      - ../project-spec:/external/project-spec:Z,U
+      - ../hardware:/external/hardware:Z,U
+      - ../BSP:/external/BSP:Z,U
+
+    user: 0:0
+
+    command: >
+      /bin/bash -c "
+        chown -R petalinux:petalinux /projects
+        chown -R petalinux:petalinux /external
+        su - petalinux -c '
+          source /petalinux/settings.sh
+          if [ ! -d /projects/space-invaders ]; then
+            cd /projects
+            cp /external/hardware/* .
+            cp /external/BSP/*.bsp .
+            petalinux-create project --template zynqMP -s *.bsp -n space-invaders
+            cd space-invaders
+            petalinux-create modules --enable -n u-dma-buf
+            petalinux-create apps --enable --template c -n space-invaders
+            cp -r /external/project-spec .
+          fi
+          touch /projects/.init_done
+          exit 0
+        '
+        exit 0
+      "
+
+  app:
+    depends_on:
+      - init
+
+    # Keep the thing open
+    stdin_open: true
+    tty: true  
+
+    # Here to disable the warning from older docker versions
+    platform: linux/amd64
+
+    # Setup the container from image with name
+    image: docker.io/library/petalinux:latest
+    container_name: petalinux
+
+    # Setup google and cloudflare DNS for petalinux mirrors
+    network_mode: host
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
+    user: 1000:1000
+
+    command: >
+      /bin/bash -lc "
+        while [ ! -f /projects/.init_done ]; do
+          sleep 2
+        done
+        rm -rf /projects/space-invaders/project-spec/meta-user/recipes-apps/space-invaders/files
+        ln -s /external/space-invaders /projects/space-invaders/project-spec/meta-user/recipes-apps/space-invaders/files
+        cd /projects/space-invaders/
+        cp ../Makefile .
+        source /petalinux/settings.sh
+        make | tee /projects/petalinux.log
+        exit 0
+      "
+
+    # Mount the folders for ease of transport
+    volumes:
+      - ../projects:/projects:Z,U
+      - ../space_invaders:/external/space-invaders:Z,U
+
+

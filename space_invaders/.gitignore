@@ -1,0 +1,7 @@
+hw_sim
+sw_game
+TODO
+*.o
+**/*.o
+space-invaders
+

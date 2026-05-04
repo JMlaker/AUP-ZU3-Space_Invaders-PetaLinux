@@ -1,0 +1,309 @@
+// hw_sim.c: Hardware simulator - SDL2-based framebuffer display, input handler, and vsync generator
+// Simulates PYNQ hardware: creates shared memory MMIO for game software,
+// handles SDL2 window/rendering, keyboard input, and double-buffered framebuffer swap
+// USAGE: Run hw_sim first, then run sw_game in another terminal
+#include "hw_contract.h"
+#include <dirent.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <linux/fb.h>
+#include <linux/kd.h>
+#include <linux/input-event-codes.h>
+#include <libevdev-1.0/libevdev/libevdev.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <time.h>
+
+#define SHM_NAME "/pynq_fbmmio"
+
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+
+/// shm_total_size: Calculate total shared memory size needed
+/// Returns: Bytes needed = page-aligned registers + 2 framebuffers (double-buffered)
+static size_t shm_total_size(void) {
+	size_t regs = sizeof(mmio_regs_t);
+	size_t fbs  = (size_t)FB_COUNT * (size_t)FB_SIZE;
+	size_t page = 4096;
+	size_t regs_pages = (regs + page - 1) / page;
+	return regs_pages * page + fbs;
+}
+
+static int tty_fd = -1;
+
+void restore_tty(void) {
+	if (tty_fd >= 0) {
+		ioctl(tty_fd, KDSKBMODE, K_XLATE);
+		ioctl(tty_fd, KDSETMODE, KD_TEXT);
+		close(tty_fd);
+		tty_fd = -1;
+	}
+}
+
+void setup_handlers();
+
+void setup_tty(void) {
+	tty_fd = open("/dev/tty", O_RDWR | O_NOCTTY);
+	if (tty_fd < 0) return;
+
+	setup_handlers();
+
+	ioctl(tty_fd, KDSETMODE, KD_GRAPHICS);
+	ioctl(tty_fd, KDSKBMODE, K_OFF);
+}
+
+void handle_signal(int sig) {
+	restore_tty();
+	_exit(1);
+}
+
+void setup_handlers(void) {
+	atexit(restore_tty);
+	signal(SIGINT, handle_signal);
+	signal(SIGTERM, handle_signal);
+	signal(SIGSEGV, handle_signal);
+}
+
+int find_keyboard_event(char *out_path, size_t out_size) {
+	DIR *dir = opendir("/dev/input");
+	if (!dir) return -1;
+
+	struct dirent *ent;
+	while ((ent = readdir(dir)) != NULL) {
+		if (strncmp(ent->d_name, "event", 5) != 0) continue;
+
+		char path[300];
+		snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+
+		int fd = open(path, O_RDONLY | O_NONBLOCK);
+		if (fd < 0) continue;
+
+		struct libevdev *dev = NULL;
+		if (libevdev_new_from_fd(fd, &dev) < 0) {
+			close(fd);
+			continue;
+		}
+
+		if (libevdev_has_event_type(dev, EV_KEY) &&
+				libevdev_has_event_code(dev, EV_KEY, KEY_A)) {
+			strncpy(out_path, path, out_size);
+			libevdev_free(dev);
+			closedir(dir);
+			return fd;
+		}
+
+		libevdev_free(dev);
+		close(fd);
+	}
+
+	closedir(dir);
+	return -1;
+}
+
+//extern void commit_ins();
+
+/// main: Hardware simulator main loop
+/// Creates shared memory and MMIO registers, initializes SDL2 window/renderer,
+/// polls keyboard input, increments vsync counter, handles buffer swaps,
+/// and displays framebuffer at ~60 Hz (~16.7ms per frame)
+/// Returns: 0 on normal exit (window closed), 1 on initialization error
+int fb_sim_main(int framerate) {
+	shm_unlink(SHM_NAME);
+	size_t total = shm_total_size();
+
+	int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR | O_EXCL, 0666);
+	if (fd < 0) { perror("shm_open"); return errno; }
+	if (ftruncate(fd, (off_t)total) != 0) { perror("ftruncate"); return errno; }
+
+	uint8_t *base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (base == MAP_FAILED) { perror("mmap"); return 1; }
+
+	size_t page = 4096;
+	mmio_regs_t *regs = (mmio_regs_t *)(base + 0);
+	uint8_t *fb_base  = base + page;
+
+	memset((void*)regs, 0, sizeof(*regs));
+	regs->front_idx = 0;
+	regs->back_idx  = 1;
+	regs->prop_quit = 0;
+
+	int fb = open("/dev/fb0", O_RDWR);
+	if (fb < 0) { perror("open"); return 1; }
+
+	struct fb_var_screeninfo vinfo;
+	struct fb_fix_screeninfo finfo;
+
+	ioctl(fb, FBIOGET_FSCREENINFO, &finfo);
+	ioctl(fb, FBIOGET_VSCREENINFO, &vinfo);
+
+	long screensize = finfo.line_length * vinfo.yres;
+
+	uint8_t *fbp = mmap(NULL, screensize, PROT_READ | PROT_WRITE, MAP_SHARED, fb, 0);
+	if (fbp == MAP_FAILED) { perror("mmap"); return 1; }
+
+	// SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
+	// SDL_setenv("SDL_INPUT_LINUX_EVDEV", "1", 1);
+	// SDL_setenv("SDL_EVDEV_KBD", "/dev/input/event1", 1);
+
+	struct libevdev *dev = NULL;
+	// char kb_path[256];
+	//int input_fd = find_keyboard_event(kb_path, sizeof(kb_path));
+	int input_fd = open("/dev/input/event0", O_RDONLY | O_NONBLOCK);
+
+	if (input_fd < 0) {
+		printf("No keyboard found\n");
+		return 1;
+	}
+
+	libevdev_new_from_fd(input_fd, &dev);
+
+	setup_tty();
+
+	// SDL_Window *win = SDL_CreateWindow("hw_sim 720p",
+	//     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H, 0);
+	// if (!win) { fprintf(stderr, "SDL_CreateWindow failed\n"); return 1; }
+
+	// SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+	// if (!ren) { fprintf(stderr, "SDL_CreateRenderer failed\n"); return 1; }
+
+	// SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
+	//     SDL_TEXTUREACCESS_STREAMING, W, H);
+	// if (!tex) { fprintf(stderr, "SDL_CreateTexture failed\n"); return 1; }
+
+	bool running = true;
+	// const double target_frame_time_sec = 1.0 / ((double) framerate);
+	long target_frame_rate = (long) framerate;
+	long target_frame_time_nsec  = 1000000000L / target_frame_rate;
+
+	// struct timespec prev_frame_time;
+	// if (clock_gettime(CLOCK_MONOTONIC, &prev_frame_time) != 0) {
+	// 	perror("clock_gettime");
+	// 	return 1;
+	// }
+
+	memset(fbp, 0, screensize);
+
+	struct timespec frame_start, frame_end, sleep_time;
+
+	while (running) {
+		clock_gettime(CLOCK_MONOTONIC, &frame_start);
+
+		struct input_event ev;
+		int rc;
+
+		while ((rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &ev)) == 0) {
+			uint32_t ev_btn = 0;
+
+			// printf("Key pressed: %d\t Mode: %d\n", ev.code, ev.value);
+
+			switch (ev.code) {
+				case KEY_LEFT:
+				case KEY_A:
+					// printf("Left!\n");
+					ev_btn |= 0x1; 
+					break;
+				case KEY_RIGHT:
+				case KEY_D:
+					// printf("Right!\n");
+					ev_btn |= 0x2; 
+					break;
+				case KEY_UP:
+				case KEY_W:
+					// printf("Up!\n");
+					ev_btn |= BTN_UP; 
+					break;
+				case KEY_DOWN:
+				case KEY_S:
+					// printf("Down!\n");
+					ev_btn |= BTN_DOWN; 
+					break;
+				case KEY_SPACE:
+					// printf("Fire!\n");
+					ev_btn |= (BTN_FIRE | BTN_SEL); 
+					break;
+				case KEY_ESC:
+					// printf("Quit!\n");
+					ev_btn |= BTN_QUIT;
+					break;
+				case KEY_P:
+					// printf("Pause!\n");
+					ev_btn |= BTN_PAUSE;
+					break;
+				case KEY_R:
+					ev_btn |= BTN_RESET;
+					break;
+				case KEY_ENTER:
+					ev_btn |= BTN_SEL;
+					break;
+				case KEY_Z:
+					if (ev.value == 1) {
+						target_frame_rate -= 5;
+						if (target_frame_rate < 30) target_frame_rate = 30;
+						target_frame_time_nsec  = 1000000000L / target_frame_rate;
+					}
+					break;
+				case KEY_X:
+					if (ev.value == 1) {
+						target_frame_rate += 5;
+						if (target_frame_rate > 70) target_frame_rate = 70;
+						target_frame_time_nsec  = 1000000000L / target_frame_rate;
+					}
+					break;
+				default:
+					break;
+			}
+
+			if (ev.value == 1 || ev.value == 2) regs->buttons |= ev_btn;
+			else if (ev.value == 0) regs->buttons &= ~ev_btn;
+
+		}
+
+		// Quitting is disabled for the demo.
+		if (regs->buttons & BTN_QUIT) running = false;
+
+		regs->vsync_counter++;
+
+		if (regs->swap_request) {
+			uint32_t new_front = regs->back_idx % FB_COUNT;
+			uint32_t new_back  = regs->front_idx % FB_COUNT;
+			regs->front_idx = new_front;
+			regs->back_idx  = new_back;
+			regs->swap_request = 0;
+			regs->swap_ack = regs->vsync_counter;
+		}
+
+		commit_ins();
+
+		clock_gettime(CLOCK_MONOTONIC, &frame_end);
+		
+		long elapsed_ns =
+			(frame_end.tv_sec - frame_start.tv_sec) * 1000000000L +
+			(frame_end.tv_nsec - frame_start.tv_nsec);
+
+		if (elapsed_ns < target_frame_time_nsec) {
+			long remaining = target_frame_time_nsec - elapsed_ns;
+			sleep_time.tv_sec = remaining / 1000000000L;
+			sleep_time.tv_nsec = remaining % 1000000000L;
+			nanosleep(&sleep_time, NULL);
+		}
+	}
+
+	restore_tty();
+
+	// SDL_DestroyTexture(tex);
+	// SDL_DestroyRenderer(ren);
+	// SDL_DestroyWindow(win);
+
+	munmap(base, total); munmap(fbp, screensize);
+	close(fd); close(fb);
+	shm_unlink(SHM_NAME);
+	return 0;
+}
+

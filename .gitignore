@@ -1,0 +1,7 @@
+# For legal purposes, make sure that the petalinux installer isn't tracked
+**/*petalinux*.run
+
+# Exclude runtime only directories
+petalinux
+projects
+
