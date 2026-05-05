@@ -1,9 +1,17 @@
 # AUP-ZU3 Space-Invaders Petalinux Image
+This repository contains what is necessary to build a PetaLinux image for our ECE554 Capstone project at UW Madison.
+
+The PetaLinux image is built entirely within a podman container so it (should) work regardless of OS.
+
+There is a custom Space-Invaders inspired rougelike video game built directly into the image, with the FPGA hardware acting as a 2D raster graphics engine to generate the game's frames.
+
 For the main development repository, see [maggardcolin/ECE554_Capstone](https://github.com/maggardcolin/ECE554_Capstone/tree/pl-render).
 
 ## Prerequisites
-You must download PetaLinux 2024.1 from [AMD's website](https://www.xilinx.com/support/download/index.html/content/xilinx/en/downloadNav/embedded-design-tools.html) and place it inside `./Container/container`.\
-This project was only tested using rootless [podman](https://podman.io/). For any other container program, please see the **Notices** section.\
+You must download PetaLinux 2024.1 from [AMD's website](https://www.xilinx.com/support/download/index.html/content/xilinx/en/downloadNav/embedded-design-tools.html) and place it inside `./Container/container`.
+
+This project was only tested using rootless [podman](https://podman.io/). For any other container program, please see the **Notices** section.
+
 For faster flashing, you can install The YoctoProject's bmaptool from their [GitHub](https://github.com/yoctoproject/bmaptool) or through your package manager if it has it (e.g. bmaptool in AUR).
 
 ## Running PetaLinux
@@ -38,11 +46,12 @@ sudo dd if=petalinux-sdimage.wic of=[SD block device] bs=1M status=progress (opt
 ```
 
 To run the game:
-1. Plug your AUP-ZU3 into your display with an active mDP cable
+1. Plug your AUP-ZU3 into your display with an active mDP cable\
+1.1. The display must support 640x480 resolution for the game to run at full screen (most do)
 2. Swap the boot switch to SD
 3. Plug in the SD card
-4. Power and turn on the device
-4.1. Note that this can take a minute or two before signs of life on the display
+4. Power and turn on the AUP-ZU3\
+4.1. Note that this can take a minute or two before signs of life on the display\
 4.2. Feel free to connect to UART for a serial terminal and watch the boot messages
 5. Plug in a keyboard (I found non-QMK and non-VIA keyboards to work more consistently)
 6. Enter the username `petalinux`
@@ -60,13 +69,28 @@ podman start petalinux
 # Exec into the container
 podman exec -it petalinux bash
 ```
+Inside the container, you must re-own all the files and change to a non-root user:
+```bash
+# INSIDE THE CONTAINER!!
+chown -R petalinux:petalinux /projects /external
+su petalinux
+```
 
 Additionally, feel free to steal the Containerfile for your own use.
 
 ## Notices
+### podman Failed at compose
+Are you running podman rootless? Check `systemctl --user status podman.socket`\
+If this isn't wasn't the error, look into podman specific debugs.
+
 ### Alternate Container
 I personally prefer podman over Docker or other container programs due to its true rootless mode.\
 You can try using your favourite container program by overriding with `env CONTAINER=[container program] make`
+
+## SELinux
+SELinux should not cause any initial problems and was used in the initial development of the game.
+
+There are some problems with adding and/or changing files after the container was already built. If you run into any, try rebuilding the container by first unsharing `make unshare`, then killing and removing the container before rerunning `make`.
 
 ### Visual Bugs?
 Pixel artifacting and other visual bugs are common and expected. There are many reasons why they might be occuring, we didn't delve too deep into debugging them.
@@ -85,4 +109,4 @@ Regardless, if you want to continue, the most important files for the graphics a
 All graphical instructions must be made with `l_putpix`, as `l_putrect` does not work due to unfixed timing violations.
 
 ## Acknowledgement
-This project makes use of ikwzm/udmabuf and ncurses' libtinfo5. See project-spec/meta-user/recipe-modules/u-dma-buf/files and container/libs respectively for copyright and licensing details.
+This project makes use of [ikwzm/udmabuf](https://github.com/ikwzm/udmabuf) and ncurses' libtinfo5. See project-spec/meta-user/recipe-modules/u-dma-buf/files and container/libs respectively for copyright and licensing details.
