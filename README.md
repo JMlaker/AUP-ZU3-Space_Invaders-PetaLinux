@@ -15,7 +15,7 @@ This project was only tested using rootless [podman](https://podman.io/). For an
 For faster flashing, you can install The YoctoProject's bmaptool from their [GitHub](https://github.com/yoctoproject/bmaptool) or through your package manager if it has it (e.g. bmaptool in AUR).
 
 ## Running PetaLinux
-Note that this will take 30+ minutes on the first run and will use up 100% CPU at some stages.\
+Note that this will take 30+ minutes on the first run and will use up 100% CPU at some stages.
 
 To build the image, run one of the following:
 ```bash
@@ -87,7 +87,7 @@ If this isn't wasn't the error, look into podman specific debugs.
 I personally prefer podman over Docker or other container programs due to its true rootless mode.\
 You can try using your favourite container program by overriding with `env CONTAINER=[container program] make`
 
-## SELinux
+### SELinux
 SELinux should not cause any initial problems and was used in the initial development of the game.
 
 There are some problems with adding and/or changing files after the container was already built. If you run into any, try rebuilding the container by first unsharing `make unshare`, then killing and removing the container before rerunning `make`.
