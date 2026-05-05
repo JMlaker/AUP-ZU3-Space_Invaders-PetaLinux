@@ -43,7 +43,6 @@ services:
           rm -rf /projects/space-invaders/project-spec/meta-user/recipes-apps/space-invaders/files
           ln -s /external/space-invaders /projects/space-invaders/project-spec/meta-user/recipes-apps/space-invaders/files
           cp ../Makefile .
-          source /petalinux/settings.sh
           make | tee /projects/petalinux.log
           exit 0
         '

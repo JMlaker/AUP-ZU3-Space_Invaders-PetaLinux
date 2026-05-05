@@ -6,5 +6,5 @@ all:
 	petalinux-build
 	petalinux-package boot --u-boot --fpga --force
 	petalinux-package wic --i images/linux --bootfiles "BOOT.BIN image.ub system.dtb boot.scr" --rootfs-file images/linux/rootfs.tar.gz
-	bmaptool create images/linux/petalinux-sdimage.wic > images/linux/petalinux-sdimage.wic.bmap
+	bmaptool create -o images/linux/petalinux-sdimage.wic.bmap images/linux/petalinux-sdimage.wic 
 	echo "Petalinux finished..."
